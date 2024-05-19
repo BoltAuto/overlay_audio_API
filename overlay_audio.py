@@ -14,9 +14,20 @@ def adjust_background_music(speech, music, music_volume_adjustment):
     
     return speech, music
 
+def apply_fades(audio, fade_in_duration=0, fade_out_duration=0):
+    """
+    Applies fade-in and fade-out effects to the audio.
+    """
+    if fade_in_duration > 0:
+        audio = audio.fade_in(fade_in_duration * 1000)
+    if fade_out_duration > 0:
+        audio = audio.fade_out(fade_out_duration * 1000)
+    return audio
+
 def overlay_audio(speech_path, music_path, output_path, music_volume_adjustment=-10, 
                   speech_start=0, speech_end=None, music_start=0, music_end=None, 
-                  overlay_start=0):
+                  speech_overlay_start=0, music_overlay_start=0, music_continue_after_speech=0,
+                  fade_in_duration=0, fade_out_duration=0):
     """
     Overlays a speech/lyrics audio file with background music.
     """
@@ -31,24 +42,24 @@ def overlay_audio(speech_path, music_path, output_path, music_volume_adjustment=
     # Adjust background music volume
     speech, music = adjust_background_music(speech, music, music_volume_adjustment)
 
-    # Loop the background music if it's shorter than the speech
+    # Pad the start of the music and speech with silence if overlay_start is specified
+    if music_overlay_start > 0:
+        music = AudioSegment.silent(duration=music_overlay_start*1000) + music
+    if speech_overlay_start > 0:
+        speech = AudioSegment.silent(duration=speech_overlay_start*1000) + speech
+    
+    # Ensure music is at least as long as the speech, adding silence if necessary
     if len(music) < len(speech):
         music = (music * (len(speech) // len(music) + 1))[:len(speech)]
-    
-    # If the music is still shorter, pad with silence
     if len(music) < len(speech):
         music = music + AudioSegment.silent(duration=len(speech) - len(music))
     
-    # Pad the start of the speech with silence if overlay_start is specified
-    if overlay_start > 0:
-        speech = AudioSegment.silent(duration=overlay_start*1000) + speech
+    # Apply fades
+    combined_duration = len(speech) + music_continue_after_speech * 1000
+    combined = music.overlay(speech, position=speech_overlay_start * 1000)
+    combined = combined[:combined_duration]
+    combined = apply_fades(combined, fade_in_duration, fade_out_duration)
     
-    # Trim or pad the music to the length of the speech
-    music = music[:len(speech)]
-    
-    # Overlay the speech on the music
-    combined = music.overlay(speech)
-
     # Export the final audio
     combined.export(output_path, format="mp3")
 
@@ -71,11 +82,17 @@ def main():
     speech_end = None  # End of the speech portion to use (in seconds), None for full length
     music_start = 0  # Start of the music portion to use (in seconds)
     music_end = None  # End of the music portion to use (in seconds), None for full length
-    overlay_start = 0  # When to start the overlay in the speech file (in seconds)
+    speech_overlay_start = 0  # When to start the overlay in the speech file (in seconds)
+    music_overlay_start = 0  # When to start the overlay in the music file (in seconds)
+    music_continue_after_speech = 5  # How long the music continues after the speech ends (in seconds)
+    fade_in_duration = 3  # Fade-in duration (in seconds)
+    fade_out_duration = 3  # Fade-out duration (in seconds)
     
     # Overlay the audio
     overlay_audio(speech_path, music_path, output_path, music_volume_adjustment, 
-                  speech_start, speech_end, music_start, music_end, overlay_start)
+                  speech_start, speech_end, music_start, music_end, 
+                  speech_overlay_start, music_overlay_start, 
+                  music_continue_after_speech, fade_in_duration, fade_out_duration)
 
 if __name__ == "__main__":
     main()
