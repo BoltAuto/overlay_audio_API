@@ -1,5 +1,3 @@
-## README.md
-
 # Audio Overlay Script
 
 This Python script overlays a speech/lyrics audio file with a background music file, ensuring the background music doesn't overpower the speech. The script uses `pydub` for audio manipulation and requires `ffmpeg` for processing audio files.
@@ -11,7 +9,9 @@ This Python script overlays a speech/lyrics audio file with a background music f
 - Allows selecting specific parts of both the speech and music files for the overlay.
 - Ensures the music does not overpower the speech by adjusting the volume of the music.
 - Supports padding with silence if the music is shorter than the speech.
-- Allows specifying the start time for overlaying the music within the speech file.
+- Allows specifying the start time for overlaying the music within both the speech and music files.
+- Allows specifying how long the music continues after the speech ends.
+- Supports fade-in and fade-out effects with customizable durations.
 - Generates a uniquely named output file using the current date and time to avoid conflicts.
 
 ## Requirements
@@ -64,11 +64,17 @@ def main():
     speech_end = None  # End of the speech portion to use (in seconds), None for full length
     music_start = 0  # Start of the music portion to use (in seconds)
     music_end = None  # End of the music portion to use (in seconds), None for full length
-    overlay_start = 0  # When to start the overlay in the speech file (in seconds)
+    speech_overlay_start = 0  # When to start the overlay in the speech file (in seconds)
+    music_overlay_start = 0  # When to start the overlay in the music file (in seconds)
+    music_continue_after_speech = 5  # How long the music continues after the speech ends (in seconds)
+    fade_in_duration = 3  # Fade-in duration (in seconds)
+    fade_out_duration = 3  # Fade-out duration (in seconds)
     
     # Overlay the audio
     overlay_audio(speech_path, music_path, output_path, music_volume_adjustment, 
-                  speech_start, speech_end, music_start, music_end, overlay_start)
+                  speech_start, speech_end, music_start, music_end, 
+                  speech_overlay_start, music_overlay_start, 
+                  music_continue_after_speech, fade_in_duration, fade_out_duration)
 
 if __name__ == "__main__":
     main()
@@ -77,9 +83,11 @@ if __name__ == "__main__":
 ## Functions
 
 - `adjust_background_music(speech, music, music_volume_adjustment)`: Adjusts the volume of the background music to ensure it doesn't overpower the speech.
+- `apply_fades(audio, fade_in_duration=0, fade_out_duration=0)`: Applies fade-in and fade-out effects to the audio.
 - `overlay_audio(speech_path, music_path, output_path, music_volume_adjustment=-10, 
                   speech_start=0, speech_end=None, music_start=0, music_end=None, 
-                  overlay_start=0)`: Overlays a speech/lyrics audio file with background music.
+                  speech_overlay_start=0, music_overlay_start=0, music_continue_after_speech=0,
+                  fade_in_duration=0, fade_out_duration=0)`: Overlays a speech/lyrics audio file with background music.
 - `main()`: Sets the input paths, output directory, and overlay parameters, and calls the `overlay_audio` function.
 
 ## License
