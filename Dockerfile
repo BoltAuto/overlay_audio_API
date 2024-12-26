@@ -19,7 +19,7 @@ COPY . .
 RUN mkdir -p temp output
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8080
 
 # Start the application
 CMD ["python", "main.py"]
