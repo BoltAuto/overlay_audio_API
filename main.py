@@ -38,6 +38,7 @@ async def root():
     </html>
     '''
 
+@app.post("/overlay")
 @app.post("/overlay/")
 async def create_overlay(
     speech_file: UploadFile = File(...),
