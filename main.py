@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydub import AudioSegment
 import uvicorn
@@ -32,6 +32,17 @@ def ensure_directories():
 
 # Call this when the app starts
 ensure_directories()
+
+def verify_audio(file_path: str) -> bool:
+    """Verify if an audio file is valid and has content"""
+    try:
+        audio = AudioSegment.from_file(file_path)
+        duration = len(audio)
+        logger.info(f"Audio file {file_path} verified: duration = {duration}ms")
+        return duration > 0
+    except Exception as e:
+        logger.error(f"Error verifying audio file {file_path}: {str(e)}")
+        return False
 
 def save_upload_file(upload_file: UploadFile) -> str:
     """Save uploaded file and return the path"""
@@ -117,6 +128,12 @@ async def create_overlay(
         speech_path = save_upload_file(speech_file)
         music_path = save_upload_file(music_file)
         
+        # Verify input files
+        if not verify_audio(speech_path):
+            raise HTTPException(status_code=400, detail="Speech file is invalid or empty")
+        if not verify_audio(music_path):
+            raise HTTPException(status_code=400, detail="Music file is invalid or empty")
+        
         # Generate output filename
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output_path = os.path.join(OUTPUT_DIR, f"combined_audio_{timestamp}.mp3")
@@ -132,19 +149,35 @@ async def create_overlay(
             fade_in_duration, fade_out_duration
         )
         
+        # Verify output file
+        if not verify_audio(output_path):
+            raise HTTPException(status_code=500, detail="Failed to generate valid output file")
+            
         logger.info(f"Audio processing complete: {output_path}")
         
-        # Return the processed file
-        response = FileResponse(
-            output_path,
-            filename=f"combined_audio_{timestamp}.mp3",
-            media_type="audio/mpeg"
+        if not os.path.exists(output_path):
+            raise HTTPException(status_code=500, detail="Output file not found")
+            
+        # Get file size for logging
+        file_size = os.path.getsize(output_path)
+        logger.info(f"Output file size: {file_size} bytes")
+        
+        # Read the file into memory before cleanup
+        with open(output_path, 'rb') as f:
+            content = f.read()
+            
+        # Clean up all files
+        cleanup_files(speech_path, music_path, output_path)
+        
+        # Return the file content directly
+        return Response(
+            content=content,
+            media_type="audio/mpeg",
+            headers={
+                'Content-Disposition': f'attachment; filename="combined_audio_{timestamp}.mp3"',
+                'Content-Length': str(len(content))
+            }
         )
-        
-        # Clean up input files but keep output file
-        cleanup_files(speech_path, music_path)
-        
-        return response
         
     except Exception as e:
         # Clean up any files if there was an error
@@ -164,6 +197,7 @@ def adjust_background_music(speech: AudioSegment, music: AudioSegment, music_vol
     Returns:
     - Adjusted music AudioSegment
     """
+    logger.info(f"Adjusting music volume by {music_volume_adjustment} dB")
     return music + music_volume_adjustment
 
 def apply_fades(audio: AudioSegment, fade_in_duration: int = 0, fade_out_duration: int = 0) -> AudioSegment:
@@ -179,8 +213,10 @@ def apply_fades(audio: AudioSegment, fade_in_duration: int = 0, fade_out_duratio
     - AudioSegment with fades applied
     """
     if fade_in_duration > 0:
+        logger.info(f"Applying fade in: {fade_in_duration} seconds")
         audio = audio.fade_in(fade_in_duration * 1000)
     if fade_out_duration > 0:
+        logger.info(f"Applying fade out: {fade_out_duration} seconds")
         audio = audio.fade_out(fade_out_duration * 1000)
     return audio
 
@@ -217,36 +253,57 @@ def overlay_audio(
     - fade_in_duration: Duration of fade in effect (seconds)
     - fade_out_duration: Duration of fade out effect (seconds)
     """
-    # Load audio files
-    speech = AudioSegment.from_file(speech_path)
-    music = AudioSegment.from_file(music_path)
-    
-    # Extract portions of audio files
-    speech = speech[speech_start * 1000:speech_end * 1000 if speech_end else len(speech)]
-    music = music[music_start * 1000:music_end * 1000 if music_end else len(music)]
-    
-    # Adjust music volume
-    adjusted_music = adjust_background_music(speech, music, music_volume_adjustment)
-    
-    # Create silence for padding
-    silence = AudioSegment.silent(duration=speech_overlay_start * 1000)
-    
-    # Combine audio
-    result = silence + speech
-    
-    # Overlay adjusted music starting at the specified position
-    music_position = speech_overlay_start * 1000
-    result = result.overlay(adjusted_music, position=music_position)
-    
-    # Add continuation of music after speech if specified
-    if music_continue_after_speech > 0:
-        result = result + adjusted_music[len(result) - music_position:len(result) - music_position + (music_continue_after_speech * 1000)]
-    
-    # Apply fades
-    result = apply_fades(result, fade_in_duration, fade_out_duration)
-    
-    # Export result
-    result.export(output_path, format="mp3")
+    try:
+        logger.info("Loading audio files")
+        # Load audio files
+        speech = AudioSegment.from_file(speech_path)
+        music = AudioSegment.from_file(music_path)
+        
+        logger.info(f"Speech duration: {len(speech)}ms, Music duration: {len(music)}ms")
+        
+        # Extract portions of audio files
+        speech = speech[speech_start * 1000:speech_end * 1000 if speech_end else len(speech)]
+        music = music[music_start * 1000:music_end * 1000 if music_end else len(music)]
+        
+        logger.info(f"After trimming - Speech duration: {len(speech)}ms, Music duration: {len(music)}ms")
+        
+        # Adjust music volume
+        adjusted_music = adjust_background_music(speech, music, music_volume_adjustment)
+        
+        # Create silence for padding
+        silence = AudioSegment.silent(duration=speech_overlay_start * 1000)
+        
+        # Combine audio
+        result = silence + speech
+        
+        # Overlay adjusted music starting at the specified position
+        music_position = speech_overlay_start * 1000
+        result = result.overlay(adjusted_music, position=music_position)
+        
+        # Add continuation of music after speech if specified
+        if music_continue_after_speech > 0:
+            logger.info(f"Adding {music_continue_after_speech} seconds of music continuation")
+            result = result + adjusted_music[len(result) - music_position:len(result) - music_position + (music_continue_after_speech * 1000)]
+        
+        # Apply fades
+        result = apply_fades(result, fade_in_duration, fade_out_duration)
+        
+        logger.info(f"Final audio duration: {len(result)}ms")
+        
+        # Export result
+        logger.info(f"Exporting to {output_path}")
+        result.export(output_path, format="mp3")
+        
+        # Verify the exported file
+        if os.path.exists(output_path):
+            file_size = os.path.getsize(output_path)
+            logger.info(f"Export successful. File size: {file_size} bytes")
+        else:
+            raise Exception("Failed to create output file")
+            
+    except Exception as e:
+        logger.error(f"Error in overlay_audio: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
