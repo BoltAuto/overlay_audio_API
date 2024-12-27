@@ -179,13 +179,42 @@ async def create_overlay(
         cleanup_files(speech_path, music_path, output_path)
         
         logger.info("Sending response")
-        # Return the file content directly
+        
+        # Check if the client accepts audio/mpeg
+        accept_header = request.headers.get('accept', '')
+        logger.info(f"Client accept header: {accept_header}")
+        
+        # Get user agent for debugging
+        user_agent = request.headers.get('user-agent', '')
+        logger.info(f"Client user agent: {user_agent}")
+        
+        # Check if the request is coming from n8n
+        is_n8n = 'axios' in user_agent.lower()
+        logger.info(f"Request is from n8n: {is_n8n}")
+        
+        # If it's n8n, return a JSON response with the audio as base64
+        if is_n8n:
+            import base64
+            audio_base64 = base64.b64encode(content).decode('utf-8')
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content={
+                    "filename": f"combined_audio_{timestamp}.mp3",
+                    "contentType": "audio/mpeg",
+                    "data": audio_base64
+                }
+            )
+        
+        # For other clients, return the binary audio file
         return Response(
             content=content,
             media_type="audio/mpeg",
             headers={
                 'Content-Disposition': f'attachment; filename="combined_audio_{timestamp}.mp3"',
-                'Content-Length': str(len(content))
+                'Content-Length': str(len(content)),
+                'Content-Type': 'audio/mpeg',
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-cache'
             }
         )
         
