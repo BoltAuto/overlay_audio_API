@@ -1,12 +1,13 @@
 import os
 import logging
 from datetime import datetime
-from fastapi import FastAPI, File, UploadFile, HTTPException, Response
+from fastapi import FastAPI, File, UploadFile, HTTPException, Response, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydub import AudioSegment
 import uvicorn
 from typing import Optional
 import shutil
+import aiofiles
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -44,19 +45,20 @@ def verify_audio(file_path: str) -> bool:
         logger.error(f"Error verifying audio file {file_path}: {str(e)}")
         return False
 
-def save_upload_file(upload_file: UploadFile) -> str:
-    """Save uploaded file and return the path"""
+async def save_upload_file_async(upload_file: UploadFile) -> str:
+    """Save uploaded file asynchronously and return the path"""
     try:
-        # Create a unique filename
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         filename = f"{timestamp}_{upload_file.filename}"
         temp_file_path = os.path.join(TEMP_DIR, filename)
         
         logger.info(f"Saving file to: {temp_file_path}")
         
-        # Save the file using a buffer to handle large files
-        with open(temp_file_path, "wb") as buffer:
-            shutil.copyfileobj(upload_file.file, buffer)
+        # Use aiofiles for async file operations
+        async with aiofiles.open(temp_file_path, "wb") as buffer:
+            # Read the file in chunks
+            while content := await upload_file.read(1024 * 1024):  # 1MB chunks
+                await buffer.write(content)
         
         logger.info(f"File saved successfully: {temp_file_path}")
         return temp_file_path
@@ -96,6 +98,7 @@ async def root():
 @app.post("/overlay/")
 @app.post("/overlay")
 async def create_overlay(
+    request: Request,
     speech_file: UploadFile = File(...),
     music_file: UploadFile = File(...),
     music_volume_adjustment: int = -10,
@@ -109,13 +112,17 @@ async def create_overlay(
     fade_in_duration: int = 3,
     fade_out_duration: int = 3
 ):
+    logger.info("Starting overlay request")
+    logger.info(f"Received files: speech={speech_file.filename}, music={music_file.filename}")
+    logger.info(f"Request headers: {request.headers}")
+    logger.info(f"Speech file content type: {speech_file.content_type}")
+    logger.info(f"Music file content type: {music_file.content_type}")
+    
     speech_path = None
     music_path = None
     output_path = None
     
     try:
-        logger.info("Starting audio overlay process")
-        
         # Validate file types
         for file in [speech_file, music_file]:
             if not file.filename.lower().endswith(('.mp3', '.wav', '.m4a', '.ogg')):
@@ -124,9 +131,11 @@ async def create_overlay(
                     detail=f"Unsupported file type: {file.filename}. Supported types: mp3, wav, m4a, ogg"
                 )
         
-        # Save uploaded files
-        speech_path = save_upload_file(speech_file)
-        music_path = save_upload_file(music_file)
+        # Save uploaded files asynchronously
+        speech_path = await save_upload_file_async(speech_file)
+        music_path = await save_upload_file_async(music_file)
+        
+        logger.info(f"Files saved: speech={speech_path}, music={music_path}")
         
         # Verify input files
         if not verify_audio(speech_path):
@@ -163,12 +172,13 @@ async def create_overlay(
         logger.info(f"Output file size: {file_size} bytes")
         
         # Read the file into memory before cleanup
-        with open(output_path, 'rb') as f:
-            content = f.read()
+        async with aiofiles.open(output_path, 'rb') as f:
+            content = await f.read()
             
         # Clean up all files
         cleanup_files(speech_path, music_path, output_path)
         
+        logger.info("Sending response")
         # Return the file content directly
         return Response(
             content=content,
