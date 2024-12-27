@@ -193,18 +193,17 @@ async def create_overlay(
         logger.info(f"Request is from n8n: {is_n8n}")
         
         # If it's n8n, return a JSON response with the audio as base64
-        if is_n8n:
-            import base64
-            audio_base64 = base64.b64encode(content).decode('utf-8')
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                content={
-                    "filename": f"combined_audio_{timestamp}.mp3",
-                    "contentType": "audio/mpeg",
-                    "data": audio_base64
-                }
-            )
-        
+if is_n8n:
+    import base64
+    audio_base64 = base64.b64encode(content).decode('utf-8')
+    data_uri = f"data:audio/mpeg;base64,{audio_base64}"
+    return JSONResponse(
+        content={
+            "filename": f"combined_audio_{timestamp}.mp3",
+            "contentType": "audio/mpeg",
+            "data": data_uri  # Now includes the data URI prefix
+        }
+    )      
         # For other clients, return the binary audio file
         return Response(
             content=content,
