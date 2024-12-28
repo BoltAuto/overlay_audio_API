@@ -87,13 +87,97 @@ async def root():
                 <p>Speech/Vocals file: <input type="file" name="speech_file"></p>
                 <p>Background Music file: <input type="file" name="music_file"></p>
                 <p>Music Volume Adjustment (dB): <input type="number" name="music_volume_adjustment" value="-10"></p>
-                <p>Fade In Duration (seconds): <input type="number" name="fade_in_duration" value="3"></p>
-                <p>Fade Out Duration (seconds): <input type="number" name="fade_out_duration" value="3"></p>
+                <p>Fade In Duration (seconds): <input type="number" name="fade_in_duration" value="0"></p>
+                <p>Fade Out Duration (seconds): <input type="number" name="fade_out_duration" value="0"></p>
                 <input type="submit" value="Upload and Process">
             </form>
         </body>
     </html>
     '''
+
+def adjust_background_music(speech: AudioSegment, music: AudioSegment, music_volume_adjustment: int) -> AudioSegment:
+    """
+    Adjust the volume of background music relative to speech.
+    """
+    logger.info(f"Adjusting music volume by {music_volume_adjustment} dB")
+    return music + music_volume_adjustment
+
+def overlay_audio(
+    speech_path: str,
+    music_path: str,
+    output_path: str,
+    music_volume_adjustment: int = -10,
+    speech_start: int = 0,
+    speech_end: Optional[int] = None,
+    music_start: int = 0,
+    music_end: Optional[int] = None,
+    speech_overlay_start: int = 0,
+    music_overlay_start: int = 0,
+    music_continue_after_speech: int = 0,
+    fade_in_duration: int = 0,
+    fade_out_duration: int = 0
+) -> None:
+    """
+    Overlay a speech/lyrics audio file with background music.
+    Applies fades only to the background music, not the speech.
+    """
+    try:
+        logger.info("Loading audio files")
+        # Load audio files
+        speech = AudioSegment.from_file(speech_path)
+        music = AudioSegment.from_file(music_path)
+        
+        logger.info(f"Speech duration: {len(speech)}ms, Music duration: {len(music)}ms")
+        
+        # Extract portions of audio files
+        speech = speech[speech_start * 1000:speech_end * 1000 if speech_end else len(speech)]
+        music = music[music_start * 1000:music_end * 1000 if music_end else len(music)]
+        
+        logger.info(f"After trimming - Speech duration: {len(speech)}ms, Music duration: {len(music)}ms")
+        
+        # Adjust music volume
+        adjusted_music = adjust_background_music(speech, music, music_volume_adjustment)
+        
+        # Apply fades to music ONLY (before overlay)
+        if fade_in_duration > 0:
+            logger.info(f"Applying fade in to music: {fade_in_duration} seconds")
+            adjusted_music = adjusted_music.fade_in(fade_in_duration * 1000)
+        if fade_out_duration > 0:
+            logger.info(f"Applying fade out to music: {fade_out_duration} seconds")
+            adjusted_music = adjusted_music.fade_out(fade_out_duration * 1000)
+        
+        # Create silence for padding if needed
+        if speech_overlay_start > 0:
+            silence = AudioSegment.silent(duration=speech_overlay_start * 1000)
+            result = silence + speech
+        else:
+            result = speech
+        
+        # Overlay adjusted music starting at the specified position
+        music_position = speech_overlay_start * 1000
+        result = result.overlay(adjusted_music, position=music_position)
+        
+        # Add continuation of music after speech if specified
+        if music_continue_after_speech > 0:
+            logger.info(f"Adding {music_continue_after_speech} seconds of music continuation")
+            result = result + adjusted_music[len(result) - music_position:len(result) - music_position + (music_continue_after_speech * 1000)]
+        
+        logger.info(f"Final audio duration: {len(result)}ms")
+        
+        # Export result
+        logger.info(f"Exporting to {output_path}")
+        result.export(output_path, format="mp3")
+        
+        # Verify the exported file
+        if os.path.exists(output_path):
+            file_size = os.path.getsize(output_path)
+            logger.info(f"Export successful. File size: {file_size} bytes")
+        else:
+            raise Exception("Failed to create output file")
+            
+    except Exception as e:
+        logger.error(f"Error in overlay_audio: {str(e)}")
+        raise
 
 @app.post("/overlay/")
 @app.post("/overlay")
@@ -109,14 +193,15 @@ async def create_overlay(
     speech_overlay_start: int = 0,
     music_overlay_start: int = 0,
     music_continue_after_speech: int = 5,
-    fade_in_duration: int = 3,
-    fade_out_duration: int = 3
+    fade_in_duration: int = 0,
+    fade_out_duration: int = 0
 ):
     logger.info("Starting overlay request")
     logger.info(f"Received files: speech={speech_file.filename}, music={music_file.filename}")
     logger.info(f"Request headers: {request.headers}")
     logger.info(f"Speech file content type: {speech_file.content_type}")
     logger.info(f"Music file content type: {music_file.content_type}")
+    logger.info(f"Fade parameters - in: {fade_in_duration}s, out: {fade_out_duration}s")
     
     speech_path = None
     music_path = None
@@ -201,7 +286,7 @@ async def create_overlay(
                 content={
                     "filename": f"combined_audio_{timestamp}.mp3",
                     "contentType": "audio/mpeg",
-                    "data": data_uri  # Now includes the data URI prefix
+                    "data": data_uri
                 }
             )      
         
@@ -223,126 +308,6 @@ async def create_overlay(
         cleanup_files(speech_path, music_path, output_path)
         logger.error(f"Error in create_overlay: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-def adjust_background_music(speech: AudioSegment, music: AudioSegment, music_volume_adjustment: int) -> AudioSegment:
-    """
-    Adjust the volume of background music relative to speech.
-    
-    Parameters:
-    - speech: The speech AudioSegment
-    - music: The music AudioSegment
-    - music_volume_adjustment: Volume adjustment in dB
-    
-    Returns:
-    - Adjusted music AudioSegment
-    """
-    logger.info(f"Adjusting music volume by {music_volume_adjustment} dB")
-    return music + music_volume_adjustment
-
-def apply_fades(audio: AudioSegment, fade_in_duration: int = 0, fade_out_duration: int = 0) -> AudioSegment:
-    """
-    Apply fade-in and fade-out effects to audio.
-    
-    Parameters:
-    - audio: The AudioSegment to apply fades to
-    - fade_in_duration: Duration of fade in (seconds)
-    - fade_out_duration: Duration of fade out (seconds)
-    
-    Returns:
-    - AudioSegment with fades applied
-    """
-    if fade_in_duration > 0:
-        logger.info(f"Applying fade in: {fade_in_duration} seconds")
-        audio = audio.fade_in(fade_in_duration * 1000)
-    if fade_out_duration > 0:
-        logger.info(f"Applying fade out: {fade_out_duration} seconds")
-        audio = audio.fade_out(fade_out_duration * 1000)
-    return audio
-
-def overlay_audio(
-    speech_path: str,
-    music_path: str,
-    output_path: str,
-    music_volume_adjustment: int = -10,
-    speech_start: int = 0,
-    speech_end: Optional[int] = None,
-    music_start: int = 0,
-    music_end: Optional[int] = None,
-    speech_overlay_start: int = 0,
-    music_overlay_start: int = 0,
-    music_continue_after_speech: int = 0,
-    fade_in_duration: int = 0,
-    fade_out_duration: int = 0
-) -> None:
-    """
-    Overlay a speech/lyrics audio file with background music.
-    
-    Parameters:
-    - speech_path: Path to speech audio file
-    - music_path: Path to background music file
-    - output_path: Path for output file
-    - music_volume_adjustment: How many dB to adjust music volume
-    - speech_start: Start time in speech file (seconds)
-    - speech_end: End time in speech file (seconds)
-    - music_start: Start time in music file (seconds)
-    - music_end: End time in music file (seconds)
-    - speech_overlay_start: When to start overlay in speech (seconds)
-    - music_overlay_start: When to start overlay in music (seconds)
-    - music_continue_after_speech: How long music continues after speech (seconds)
-    - fade_in_duration: Duration of fade in effect (seconds)
-    - fade_out_duration: Duration of fade out effect (seconds)
-    """
-    try:
-        logger.info("Loading audio files")
-        # Load audio files
-        speech = AudioSegment.from_file(speech_path)
-        music = AudioSegment.from_file(music_path)
-        
-        logger.info(f"Speech duration: {len(speech)}ms, Music duration: {len(music)}ms")
-        
-        # Extract portions of audio files
-        speech = speech[speech_start * 1000:speech_end * 1000 if speech_end else len(speech)]
-        music = music[music_start * 1000:music_end * 1000 if music_end else len(music)]
-        
-        logger.info(f"After trimming - Speech duration: {len(speech)}ms, Music duration: {len(music)}ms")
-        
-        # Adjust music volume
-        adjusted_music = adjust_background_music(speech, music, music_volume_adjustment)
-        
-        # Create silence for padding
-        silence = AudioSegment.silent(duration=speech_overlay_start * 1000)
-        
-        # Combine audio
-        result = silence + speech
-        
-        # Overlay adjusted music starting at the specified position
-        music_position = speech_overlay_start * 1000
-        result = result.overlay(adjusted_music, position=music_position)
-        
-        # Add continuation of music after speech if specified
-        if music_continue_after_speech > 0:
-            logger.info(f"Adding {music_continue_after_speech} seconds of music continuation")
-            result = result + adjusted_music[len(result) - music_position:len(result) - music_position + (music_continue_after_speech * 1000)]
-        
-        # Apply fades
-        result = apply_fades(result, fade_in_duration, fade_out_duration)
-        
-        logger.info(f"Final audio duration: {len(result)}ms")
-        
-        # Export result
-        logger.info(f"Exporting to {output_path}")
-        result.export(output_path, format="mp3")
-        
-        # Verify the exported file
-        if os.path.exists(output_path):
-            file_size = os.path.getsize(output_path)
-            logger.info(f"Export successful. File size: {file_size} bytes")
-        else:
-            raise Exception("Failed to create output file")
-            
-    except Exception as e:
-        logger.error(f"Error in overlay_audio: {str(e)}")
-        raise
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
